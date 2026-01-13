@@ -21,12 +21,30 @@ app.get('/audio/:key', async (req: Request, res: Response) => {
     const key = req.params.key as string;
     const bucketName = process.env.S3_BUCKET_NAME;
     const range = req.headers.range;
+    const CHUNK_SIZE = 1024 * 1024; // 1MB
 
     try {
+        let start = 0;
+        let end = CHUNK_SIZE - 1;
+
+        if (range) {
+            const parts = range.replace(/bytes=/, "").split("-");
+            start = parseInt(parts[0], 10);
+            const requestedEnd = parts[1] ? parseInt(parts[1], 10) : undefined;
+
+            if (requestedEnd !== undefined) {
+                end = Math.min(requestedEnd, start + CHUNK_SIZE - 1);
+            } else {
+                end = start + CHUNK_SIZE - 1;
+            }
+        }
+
+        const s3Range = `bytes=${start}-${end}`;
+
         const command = new GetObjectCommand({
             Bucket: bucketName,
             Key: key,
-            Range: range // Pass the Range header to S3 if present
+            Range: s3Range
         });
 
         const response: GetObjectCommandOutput = await s3Client.send(command);
@@ -43,7 +61,9 @@ app.get('/audio/:key', async (req: Request, res: Response) => {
         }
 
         res.set(headers);
-        res.status(range ? 206 : 200);
+        // We always return 206 Partial Content now because we are always sending a Range to S3
+        // and returning a chunk.
+        res.status(206);
 
         // Current versions of @aws-sdk/client-s3 return a ReadableStream in `Body` for Node.js
         // We can pipe it to the response.

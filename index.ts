@@ -20,21 +20,30 @@ const s3Client = new S3Client({
 app.get('/audio/:key', async (req: Request, res: Response) => {
     const key = req.params.key as string;
     const bucketName = process.env.S3_BUCKET_NAME;
+    const range = req.headers.range;
 
     try {
         const command = new GetObjectCommand({
             Bucket: bucketName,
-            Key: key
+            Key: key,
+            Range: range // Pass the Range header to S3 if present
         });
 
         const response: GetObjectCommandOutput = await s3Client.send(command);
 
         // Set appropriate headers for audio streaming
-        res.set({
+        const headers: Record<string, string | undefined> = {
             'Content-Type': response.ContentType || 'audio/mpeg',
             'Content-Length': response.ContentLength?.toString(),
-            'Accept-Ranges': 'bytes'
-        });
+            'Accept-Ranges': 'bytes',
+        };
+
+        if (response.ContentRange) {
+            headers['Content-Range'] = response.ContentRange;
+        }
+
+        res.set(headers);
+        res.status(range ? 206 : 200);
 
         // Current versions of @aws-sdk/client-s3 return a ReadableStream in `Body` for Node.js
         // We can pipe it to the response.
@@ -49,6 +58,8 @@ app.get('/audio/:key', async (req: Request, res: Response) => {
         console.error('Error fetching object from S3:', error);
         if (error.name === 'NoSuchKey') {
             res.status(404).send('Audio file not found');
+        } else if (error.name === 'InvalidRange') {
+            res.status(416).send('Range Not Satisfiable');
         } else {
             res.status(500).send('Error streaming audio');
         }
